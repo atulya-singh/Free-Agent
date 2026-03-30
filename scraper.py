@@ -13,7 +13,7 @@ import resend
 
 REPOS = [
     {
-        "label": "SpeedApply 2026", 
+        "label": "SpeedyApply 2026", 
         "raw_url": "https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/main/README.md",
     },
     {
