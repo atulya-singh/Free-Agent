@@ -242,3 +242,23 @@ def build_email(new_leads: list[dict]) -> tuple[str, str]:
     html_parts.append("</body></html>")
     return subject, "\n".join(html_parts)
 
+
+# ---------------------------------------------------------------------------
+# Section 7: Emailer
+# ---------------------------------------------------------------------------
+
+def send_email(html: str, subject: str) -> bool:
+    try:
+        params = {
+            "from": EMAIL_FROM,
+            "to": [EMAIL_TO],
+            "subject": subject,
+            "html": html,
+        }
+        resp = resend.Emails.send(params)
+        log(f"Email sent successfully (id={resp.get('id', 'unknown')})")
+        return True
+    except Exception as e:
+        log(f"Email send failed: {e}")
+        return False
+
