@@ -262,3 +262,61 @@ def send_email(html: str, subject: str) -> bool:
         log(f"Email send failed: {e}")
         return False
 
+
+# ---------------------------------------------------------------------------
+# Section 8: Persister
+# ---------------------------------------------------------------------------
+
+def save_seen(seen: set[str], filepath: str) -> None:
+    with open(filepath, "w") as f:
+        json.dump(sorted(seen), f, indent=2)
+    log(f"Saved {len(seen)} hashes to {filepath}")
+
+
+def push_to_data_branch(filepath: str) -> None:
+    import shutil
+
+    def _run(cmd: list[str], description: str) -> bool:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True
+            )
+            log(f"git: {description} — OK")
+            return True
+        except subprocess.CalledProcessError as e:
+            log(f"git: {description} — FAILED: {e.stderr.strip()}")
+            return False
+
+    _run(["git", "config", "user.email", "bot@free-agent.dev"], "set email")
+    _run(["git", "config", "user.name", "Free-Agent Bot"], "set name")
+
+    if not _run(["git", "fetch", "origin", "data"], "fetch data branch"):
+        log("Could not fetch data branch — aborting push")
+        return
+
+    # Save a copy of the file before switching branches
+    tmp_path = "/tmp/seen_jobs.json"
+    shutil.copy2(filepath, tmp_path)
+
+    if not _run(["git", "checkout", "data"], "checkout data"):
+        log("Could not checkout data branch — aborting push")
+        return
+
+    # Copy updated file into place
+    shutil.copy2(tmp_path, filepath)
+
+    _run(["git", "add", filepath], "stage seen_jobs.json")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not _run(
+        ["git", "commit", "-m", f"chore: update seen_jobs [{timestamp}]"],
+        "commit",
+    ):
+        log("Nothing to commit or commit failed")
+
+    if not _run(["git", "push", "origin", "data"], "push data"):
+        log("Push to data branch failed!")
+
+    # Switch back to original branch
+    _run(["git", "checkout", "-"], "return to previous branch")
+
