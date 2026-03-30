@@ -59,3 +59,105 @@ def fetch_readme(repo: dict) -> str | None:
         log(f"Failed to fetch {label}: {e}")
         return None
 
+
+# ---------------------------------------------------------------------------
+# Section 3: Parser
+# ---------------------------------------------------------------------------
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+
+
+def _strip_html(text: str) -> str:
+    return _HTML_TAG_RE.sub("", text).strip()
+
+
+def parse_jobs(markdown: str, label: str) -> list[dict]:
+    jobs: list[dict] = []
+    lines = markdown.splitlines()
+    current_company = ""
+    total_rows = 0
+
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        if "---" in line:
+            continue
+        cells = [c.strip() for c in line.split("|")]
+        # split on | gives empty strings at start/end for lines like |a|b|c|
+        cells = [c for c in cells if c != "" or cells.index(c) not in (0, len(cells) - 1)]
+        # Actually, re-split more carefully
+        cells = [c.strip() for c in line.strip("|").split("|")]
+
+        if len(cells) < 3:
+            continue
+
+        # Skip header row (heuristic: first valid table row with "Company" in it)
+        if any(h.lower() in ("company", "name") for h in cells):
+            continue
+
+        total_rows += 1
+
+        try:
+            if "🔒" in line:
+                continue
+
+            # Strip HTML from all cells
+            cells = [_strip_html(c) for c in cells]
+
+            # Company state machine
+            raw_company = cells[0] if len(cells) > 0 else ""
+            raw_alt = cells[1] if len(cells) > 1 else ""
+
+            if raw_company and raw_company != "↳":
+                current_company = raw_company
+            elif raw_alt and raw_alt != "↳":
+                current_company = raw_alt
+
+            company = current_company if (not raw_company or raw_company == "↳") else raw_company
+
+            role = cells[1] if len(cells) > 1 else ""
+            location = cells[2] if len(cells) > 2 else ""
+
+            # Extract URL from markdown link in any cell
+            url = ""
+            for cell_text in line.split("|"):
+                m = _MD_LINK_RE.search(cell_text)
+                if m:
+                    url = m.group(2)
+                    break
+
+            # Clean up company name from markdown link
+            m_company = _MD_LINK_RE.search(company)
+            if m_company:
+                company = m_company.group(1)
+
+            # Clean up role from markdown link
+            m_role = _MD_LINK_RE.search(role)
+            if m_role:
+                url = url or m_role.group(2)
+                role = m_role.group(1)
+
+            # Strip any remaining HTML from extracted fields
+            company = _strip_html(company)
+            role = _strip_html(role)
+            location = _strip_html(location)
+
+            if not company or not role:
+                continue
+
+            jobs.append({
+                "company": company,
+                "role": role,
+                "location": location,
+                "url": url,
+                "source": label,
+            })
+        except Exception as e:
+            log(f"Skipping bad row in {label}: {e}")
+            continue
+
+    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} rows")
+    return jobs
+
