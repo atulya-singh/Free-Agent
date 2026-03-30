@@ -84,10 +84,6 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
             continue
         if "---" in line:
             continue
-        cells = [c.strip() for c in line.split("|")]
-        # split on | gives empty strings at start/end for lines like |a|b|c|
-        cells = [c for c in cells if c != "" or cells.index(c) not in (0, len(cells) - 1)]
-        # Actually, re-split more carefully
         cells = [c.strip() for c in line.strip("|").split("|")]
 
         if len(cells) < 3:
@@ -108,19 +104,18 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
 
             # Company state machine
             raw_company = cells[0] if len(cells) > 0 else ""
-            raw_alt = cells[1] if len(cells) > 1 else ""
 
             if raw_company and raw_company != "↳":
                 current_company = raw_company
-            elif raw_alt and raw_alt != "↳":
-                current_company = raw_alt
+            # if raw_company is "↳" or empty, current_company stays unchanged
 
-            company = current_company if (not raw_company or raw_company == "↳") else raw_company
-
+            company = current_company  # always resolved through state machine
             role = cells[1] if len(cells) > 1 else ""
             location = cells[2] if len(cells) > 2 else ""
 
-            # Extract URL from markdown link in any cell
+            # Search the raw line (not stripped cells) because the URL lives inside
+            # markdown [text](url) syntax — HTML stripping would destroy it before
+            # we could extract the link.
             url = ""
             for cell_text in line.split("|"):
                 m = _MD_LINK_RE.search(cell_text)
@@ -256,7 +251,11 @@ def send_email(html: str, subject: str) -> bool:
             "html": html,
         }
         resp = resend.Emails.send(params)
-        log(f"Email sent successfully (id={resp.get('id', 'unknown')})")
+        try:
+            email_id = resp["id"]
+        except (KeyError, TypeError):
+            email_id = "unknown"
+        log(f"Email sent successfully (id={email_id})")
         return True
     except Exception as e:
         log(f"Email send failed: {e}")
