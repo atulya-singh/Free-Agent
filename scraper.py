@@ -39,3 +39,23 @@ def log(msg: str) -> None:
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}", flush=True)
 
+
+# ---------------------------------------------------------------------------
+# Section 2: Fetcher
+# ---------------------------------------------------------------------------
+
+def fetch_readme(repo: dict) -> str | None:
+    url = repo["raw_url"]
+    label = repo["label"]
+    headers = {}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        log(f"Fetched {label} ({len(resp.text)} chars)")
+        return resp.text
+    except requests.RequestException as e:
+        log(f"Failed to fetch {label}: {e}")
+        return None
+
