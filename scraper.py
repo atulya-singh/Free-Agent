@@ -1,10 +1,12 @@
 import hashlib
+import html
 import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime
+from html.parser import HTMLParser
 
 import requests
 import resend
@@ -66,17 +68,15 @@ def fetch_readme(repo: dict) -> str | None:
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
-_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']')
 
 
 def _strip_html(text: str) -> str:
     return _HTML_TAG_RE.sub("", text).strip()
 
 
-def _parse_pipe_table(markdown: str, label: str) -> list[dict]:
+def _parse_markdown_table(lines: list[str], label: str) -> list[dict]:
     """Parse markdown pipe-table format (used by SpeedyApply)."""
     jobs: list[dict] = []
-    lines = markdown.splitlines()
     current_company = ""
     total_rows = 0
 
@@ -145,53 +145,125 @@ def _parse_pipe_table(markdown: str, label: str) -> list[dict]:
             log(f"Skipping bad row in {label}: {e}")
             continue
 
-    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} pipe-table rows")
+    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} markdown table rows")
     return jobs
+
+
+class _TableParser(HTMLParser):
+    """HTMLParser subclass that extracts rows from HTML tables."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows: list[dict] = []      # {"cells": [...], "hrefs": [...], "raw": str}
+        self._in_tr = False
+        self._in_td = False
+        self._in_th = False
+        self._current_cells: list[str] = []
+        self._current_hrefs: list[str] = []
+        self._current_text = ""
+        self._current_raw = ""
+        self._is_header_row = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "tr":
+            self._in_tr = True
+            self._current_cells = []
+            self._current_hrefs = []
+            self._current_raw = ""
+            self._is_header_row = False
+        elif tag == "td" and self._in_tr:
+            self._in_td = True
+            self._current_text = ""
+        elif tag == "th" and self._in_tr:
+            self._in_th = True
+            self._is_header_row = True
+        elif tag == "a" and self._in_tr:
+            for name, value in attrs:
+                if name == "href" and value:
+                    self._current_hrefs.append(value)
+        if self._in_tr:
+            self._current_raw += self.get_starttag_text() or ""
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "td" and self._in_td:
+            self._current_cells.append(self._current_text.strip())
+            self._in_td = False
+        elif tag == "th":
+            self._in_th = False
+        elif tag == "tr" and self._in_tr:
+            self._in_tr = False
+            if not self._is_header_row and self._current_cells:
+                self.rows.append({
+                    "cells": self._current_cells,
+                    "hrefs": self._current_hrefs,
+                    "raw": self._current_raw,
+                })
+        if self._in_tr:
+            self._current_raw += f"</{tag}>"
+
+    def handle_data(self, data: str) -> None:
+        if self._in_td:
+            self._current_text += data
+        if self._in_tr:
+            self._current_raw += data
+
+    def handle_entityref(self, name: str) -> None:
+        char = html.unescape(f"&{name};")
+        if self._in_td:
+            self._current_text += char
+        if self._in_tr:
+            self._current_raw += char
+
+    def handle_charref(self, name: str) -> None:
+        char = html.unescape(f"&#{name};")
+        if self._in_td:
+            self._current_text += char
+        if self._in_tr:
+            self._current_raw += char
 
 
 def _parse_html_table(markdown: str, label: str) -> list[dict]:
     """Parse HTML <table> format (used by Simplify)."""
+    parser = _TableParser()
+    parser.feed(markdown)
+
     jobs: list[dict] = []
     current_company = ""
     total_rows = 0
 
-    row_blocks = re.findall(r"<tr>(.*?)</tr>", markdown, re.DOTALL | re.IGNORECASE)
+    for row in parser.rows:
+        cells = row["cells"]
+        hrefs = row["hrefs"]
+        raw = row["raw"]
 
-    for block in row_blocks:
-        if "<th" in block.lower():
+        if len(cells) < 3:
             continue
 
-        cells_raw = re.findall(r"<td[^>]*>(.*?)</td>", block, re.DOTALL | re.IGNORECASE)
-        if len(cells_raw) < 3:
+        # Skip header rows
+        if any(c.lower() in ("company", "role") for c in cells):
             continue
 
         total_rows += 1
 
         try:
-            if "🔒" in block:
+            if "🔒" in raw:
                 continue
 
             # Extract URL — prefer non-Simplify links (direct company links)
             url = ""
-            for cell in cells_raw:
-                m = _HREF_RE.search(cell)
-                if m:
-                    href = m.group(1)
-                    if "simplify.jobs" not in href:
-                        url = href
-                        break
-
-            if not url:
-                for cell in cells_raw:
-                    m = _HREF_RE.search(cell)
-                    if m:
-                        url = m.group(1)
-                        break
+            for href in hrefs:
+                if "simplify.jobs" not in href:
+                    url = href
+                    break
+            if not url and hrefs:
+                url = hrefs[0]
 
             # Column layout: Company | Role | Location | Application | Age
-            raw_company = _strip_html(cells_raw[0]).strip()
-            role = _strip_html(cells_raw[1]).strip()
-            location = _strip_html(cells_raw[2]).strip()
+            raw_company = html.unescape(cells[0]).strip()
+            role = html.unescape(cells[1]).strip()
+            location = html.unescape(cells[2]).strip()
 
             if raw_company and raw_company != "↳":
                 current_company = raw_company
@@ -217,9 +289,13 @@ def _parse_html_table(markdown: str, label: str) -> list[dict]:
 
 
 def parse_jobs(markdown: str, label: str) -> list[dict]:
-    if "<table" in markdown.lower():
+    lines = markdown.splitlines()
+    if markdown.count("<tr") > markdown.count("|"):
+        log(f"{label}: detected HTML table format")
         return _parse_html_table(markdown, label)
-    return _parse_pipe_table(markdown, label)
+    else:
+        log(f"{label}: detected markdown table format")
+        return _parse_markdown_table(lines, label)
 
 
 # ---------------------------------------------------------------------------
@@ -436,27 +512,5 @@ def main() -> None:
     log(f"Done in {elapsed:.1f}s")
 
 
-# ---------------------------------------------------------------------------
-# Debug: inspect Simplify's raw markdown format
-# ---------------------------------------------------------------------------
-
-def debug_simplify():
-    repo = {
-        "label": "Simplify Summer 2026",
-        "raw_url": "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md",
-    }
-    markdown = fetch_readme(repo)
-    if not markdown:
-        print("Fetch failed")
-        return
-
-    # Print the first 50 lines that contain a pipe character
-    pipe_lines = [l for l in markdown.splitlines() if "|" in l]
-    print(f"Total pipe lines: {len(pipe_lines)}")
-    print("\nFirst 20 pipe lines:")
-    for line in pipe_lines[:20]:
-        print(repr(line))
-
-
 if __name__ == "__main__":
-    debug_simplify()
+    main()
