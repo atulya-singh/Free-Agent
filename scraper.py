@@ -199,3 +199,46 @@ def merge_seen(seen: set[str], new_jobs: list[dict]) -> set[str]:
         updated.add(make_hash(job))
     return updated
 
+
+# ---------------------------------------------------------------------------
+# Section 6: Email Builder
+# ---------------------------------------------------------------------------
+
+def build_email(new_leads: list[dict]) -> tuple[str, str]:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    subject = f"{len(new_leads)} New Job Leads — {now}"
+
+    # Group by source
+    grouped: dict[str, list[dict]] = {}
+    for job in new_leads:
+        grouped.setdefault(job["source"], []).append(job)
+
+    html_parts = [
+        "<html><body>",
+        f"<h2>{len(new_leads)} New Job Leads</h2>",
+        f"<p>Scraped at {now}</p>",
+    ]
+
+    for source, jobs in grouped.items():
+        html_parts.append(f"<h3>{source}</h3>")
+        html_parts.append(
+            "<table border='1' cellpadding='6' cellspacing='0' "
+            "style='border-collapse:collapse;'>"
+        )
+        html_parts.append(
+            "<tr><th>Company</th><th>Role</th>"
+            "<th>Location</th><th>Apply</th></tr>"
+        )
+        for job in jobs:
+            link = (
+                f"<a href='{job['url']}'>Apply</a>" if job["url"] else "N/A"
+            )
+            html_parts.append(
+                f"<tr><td>{job['company']}</td><td>{job['role']}</td>"
+                f"<td>{job['location']}</td><td>{link}</td></tr>"
+            )
+        html_parts.append("</table>")
+
+    html_parts.append("</body></html>")
+    return subject, "\n".join(html_parts)
+
