@@ -278,7 +278,7 @@ def push_to_data_branch(filepath: str) -> None:
 
     def _run(cmd: list[str], description: str) -> bool:
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd, capture_output=True, text=True, check=True
             )
             log(f"git: {description} — OK")
@@ -320,3 +320,57 @@ def push_to_data_branch(filepath: str) -> None:
     # Switch back to original branch
     _run(["git", "checkout", "-"], "return to previous branch")
 
+
+# ---------------------------------------------------------------------------
+# Section 9: main()
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    import time
+
+    start = time.time()
+    log("Starting scraper run")
+
+    # 1. Fetch both READMEs
+    all_jobs: list[dict] = []
+    for repo in REPOS:
+        markdown = fetch_readme(repo)
+        if markdown is None:
+            continue
+        # 2. Parse into jobs
+        jobs = parse_jobs(markdown, repo["label"])
+        all_jobs.extend(jobs)
+
+    log(f"Total jobs across all sources: {len(all_jobs)}")
+
+    # 3. Load seen hashes
+    seen = load_seen(SEEN_JOBS_FILE)
+    log(f"Loaded {len(seen)} previously seen hashes")
+
+    # 4. Filter to new leads
+    new_leads = filter_new(all_jobs, seen)
+    log(f"New leads: {len(new_leads)}")
+
+    # 5. Exit early if nothing new
+    if not new_leads:
+        log("No new jobs found — exiting")
+        sys.exit(0)
+
+    # 6. Build and send email
+    subject, html = build_email(new_leads)
+    send_email(html, subject)
+
+    # 7. Merge and save seen hashes
+    seen = merge_seen(seen, new_leads)
+    save_seen(seen, SEEN_JOBS_FILE)
+
+    # 8. Push to data branch
+    push_to_data_branch(SEEN_JOBS_FILE)
+
+    # 9. Log runtime
+    elapsed = time.time() - start
+    log(f"Done in {elapsed:.1f}s")
+
+
+if __name__ == "__main__":
+    main()
