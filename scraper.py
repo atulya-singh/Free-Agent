@@ -24,8 +24,18 @@ REPOS = [
 
 SEEN_JOBS_FILE = "seen_jobs.json"
 
-resend.api_key     = os.environ["RESEND_API_KEY"]
-EMAIL_FROM         = os.environ["EMAIL_FROM"]
-EMAIL_TO           = os.environ["EMAIL_TO"]
-GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
+RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+resend.api_key = RESEND_API_KEY
+EMAIL_FROM     = os.environ["EMAIL_FROM"]
+EMAIL_TO       = os.environ["EMAIL_TO"]
+GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
+
+
+# ---------------------------------------------------------------------------
+# Section 1: Logger
+# ---------------------------------------------------------------------------
+
+def log(msg: str) -> None:
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
 
