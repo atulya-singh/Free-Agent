@@ -161,3 +161,17 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
     log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} rows")
     return jobs
 
+
+# ---------------------------------------------------------------------------
+# Section 4: Hasher
+# ---------------------------------------------------------------------------
+
+_PUNCTUATION_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def make_hash(job: dict) -> str:
+    raw = f"{job['company']}{job['role']}{job['location']}"
+    normalized = _PUNCTUATION_RE.sub("", raw.lower().strip())
+    normalized = " ".join(normalized.split())  # collapse whitespace
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
