@@ -175,3 +175,27 @@ def make_hash(job: dict) -> str:
     normalized = " ".join(normalized.split())  # collapse whitespace
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+
+# ---------------------------------------------------------------------------
+# Section 5: Deduplicator
+# ---------------------------------------------------------------------------
+
+def load_seen(filepath: str) -> set[str]:
+    try:
+        with open(filepath, "r") as f:
+            data = json.load(f)
+        return set(data)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def filter_new(jobs: list[dict], seen: set[str]) -> list[dict]:
+    return [job for job in jobs if make_hash(job) not in seen]
+
+
+def merge_seen(seen: set[str], new_jobs: list[dict]) -> set[str]:
+    updated = set(seen)
+    for job in new_jobs:
+        updated.add(make_hash(job))
+    return updated
+
