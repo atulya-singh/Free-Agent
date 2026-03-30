@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-import re 
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -13,7 +13,7 @@ import resend
 
 REPOS = [
     {
-        "label": "SpeedyApply 2026", 
+        "label": "SpeedyApply 2026",
         "raw_url": "https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/main/README.md",
     },
     {
@@ -24,10 +24,10 @@ REPOS = [
 
 SEEN_JOBS_FILE = "seen_jobs.json"
 
-RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 resend.api_key = RESEND_API_KEY
-EMAIL_FROM     = os.environ["EMAIL_FROM"]
-EMAIL_TO       = os.environ["EMAIL_TO"]
+EMAIL_FROM     = os.environ.get("EMAIL_FROM", "")
+EMAIL_TO       = os.environ.get("EMAIL_TO", "")
 GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN", "")
 
 
@@ -66,13 +66,15 @@ def fetch_readme(repo: dict) -> str | None:
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']')
 
 
 def _strip_html(text: str) -> str:
     return _HTML_TAG_RE.sub("", text).strip()
 
 
-def parse_jobs(markdown: str, label: str) -> list[dict]:
+def _parse_pipe_table(markdown: str, label: str) -> list[dict]:
+    """Parse markdown pipe-table format (used by SpeedyApply)."""
     jobs: list[dict] = []
     lines = markdown.splitlines()
     current_company = ""
@@ -89,7 +91,6 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
         if len(cells) < 3:
             continue
 
-        # Skip header row (heuristic: first valid table row with "Company" in it)
         if any(h.lower() in ("company", "name") for h in cells):
             continue
 
@@ -99,23 +100,17 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
             if "🔒" in line:
                 continue
 
-            # Strip HTML from all cells
-            cells = [_strip_html(c) for c in cells]
+            cells_clean = [_strip_html(c) for c in cells]
 
-            # Company state machine
-            raw_company = cells[0] if len(cells) > 0 else ""
+            raw_company = cells_clean[0] if len(cells_clean) > 0 else ""
 
             if raw_company and raw_company != "↳":
                 current_company = raw_company
-            # if raw_company is "↳" or empty, current_company stays unchanged
 
-            company = current_company  # always resolved through state machine
-            role = cells[1] if len(cells) > 1 else ""
-            location = cells[2] if len(cells) > 2 else ""
+            company = current_company
+            role = cells_clean[1] if len(cells_clean) > 1 else ""
+            location = cells_clean[2] if len(cells_clean) > 2 else ""
 
-            # Search the raw line (not stripped cells) because the URL lives inside
-            # markdown [text](url) syntax — HTML stripping would destroy it before
-            # we could extract the link.
             url = ""
             for cell_text in line.split("|"):
                 m = _MD_LINK_RE.search(cell_text)
@@ -123,18 +118,15 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
                     url = m.group(2)
                     break
 
-            # Clean up company name from markdown link
             m_company = _MD_LINK_RE.search(company)
             if m_company:
                 company = m_company.group(1)
 
-            # Clean up role from markdown link
             m_role = _MD_LINK_RE.search(role)
             if m_role:
                 url = url or m_role.group(2)
                 role = m_role.group(1)
 
-            # Strip any remaining HTML from extracted fields
             company = _strip_html(company)
             role = _strip_html(role)
             location = _strip_html(location)
@@ -153,8 +145,81 @@ def parse_jobs(markdown: str, label: str) -> list[dict]:
             log(f"Skipping bad row in {label}: {e}")
             continue
 
-    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} rows")
+    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} pipe-table rows")
     return jobs
+
+
+def _parse_html_table(markdown: str, label: str) -> list[dict]:
+    """Parse HTML <table> format (used by Simplify)."""
+    jobs: list[dict] = []
+    current_company = ""
+    total_rows = 0
+
+    row_blocks = re.findall(r"<tr>(.*?)</tr>", markdown, re.DOTALL | re.IGNORECASE)
+
+    for block in row_blocks:
+        if "<th" in block.lower():
+            continue
+
+        cells_raw = re.findall(r"<td[^>]*>(.*?)</td>", block, re.DOTALL | re.IGNORECASE)
+        if len(cells_raw) < 3:
+            continue
+
+        total_rows += 1
+
+        try:
+            if "🔒" in block:
+                continue
+
+            # Extract URL — prefer non-Simplify links (direct company links)
+            url = ""
+            for cell in cells_raw:
+                m = _HREF_RE.search(cell)
+                if m:
+                    href = m.group(1)
+                    if "simplify.jobs" not in href:
+                        url = href
+                        break
+
+            if not url:
+                for cell in cells_raw:
+                    m = _HREF_RE.search(cell)
+                    if m:
+                        url = m.group(1)
+                        break
+
+            # Column layout: Company | Role | Location | Application | Age
+            raw_company = _strip_html(cells_raw[0]).strip()
+            role = _strip_html(cells_raw[1]).strip()
+            location = _strip_html(cells_raw[2]).strip()
+
+            if raw_company and raw_company != "↳":
+                current_company = raw_company
+
+            company = current_company
+
+            if not company or not role:
+                continue
+
+            jobs.append({
+                "company": company,
+                "role": role,
+                "location": location,
+                "url": url,
+                "source": label,
+            })
+        except Exception as e:
+            log(f"Skipping bad row in {label}: {e}")
+            continue
+
+    log(f"{label}: {len(jobs)} valid jobs parsed from {total_rows} HTML table rows")
+    return jobs
+
+
+def parse_jobs(markdown: str, label: str) -> list[dict]:
+    if "<table" in markdown.lower():
+        return _parse_html_table(markdown, label)
+    return _parse_pipe_table(markdown, label)
 
 
 # ---------------------------------------------------------------------------
@@ -371,5 +436,27 @@ def main() -> None:
     log(f"Done in {elapsed:.1f}s")
 
 
+# ---------------------------------------------------------------------------
+# Debug: inspect Simplify's raw markdown format
+# ---------------------------------------------------------------------------
+
+def debug_simplify():
+    repo = {
+        "label": "Simplify Summer 2026",
+        "raw_url": "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md",
+    }
+    markdown = fetch_readme(repo)
+    if not markdown:
+        print("Fetch failed")
+        return
+
+    # Print the first 50 lines that contain a pipe character
+    pipe_lines = [l for l in markdown.splitlines() if "|" in l]
+    print(f"Total pipe lines: {len(pipe_lines)}")
+    print("\nFirst 20 pipe lines:")
+    for line in pipe_lines[:20]:
+        print(repr(line))
+
+
 if __name__ == "__main__":
-    main()
+    debug_simplify()
