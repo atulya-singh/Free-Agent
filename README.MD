@@ -1,4 +1,4 @@
-# Free-Agent 🤖
+# Free-Agent 
 
 An automated internship tracking bot that monitors the two most-watched SWE internship repositories on GitHub and delivers batched email alerts for new postings — so you hear about roles the moment they drop, not hours later.
 
